@@ -7,208 +7,141 @@
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
 #include "mlir/Dialect/Tosa/IR/TosaOps.h"
+#include "mlir/IR/Matchers.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/GreedyPatternRewriteDriver.h"
 #include "scalehls/Transforms/Passes.h"
 #include "scalehls/Transforms/Utils.h"
 
 using namespace mlir;
 using namespace scalehls;
-using namespace hls;
 
-static bool applyTosaConstToArgument(ModuleOp module) {
-  auto builder = OpBuilder(module);
+namespace {
+struct Conv2DOpRewritePattern : public OpRewritePattern<tosa::Conv2DOp> {
+  using OpRewritePattern<tosa::Conv2DOp>::OpRewritePattern;
 
-  // Record ops to be erased.
-  SmallVector<Operation *, 32> opToErase;
-
-  // Remove remaining transposes
-  for (auto func : module.getOps<FuncOp>()) {
-    for (auto transposeOp : func.getOps<tosa::TransposeOp>()) {
-      auto loc = transposeOp.getLoc();
-
-      if (!transposeOp.input1().getDefiningOp()) {
-        auto idx = 0;
-        Value transposeArg;
-        for (auto arg : func.front().getArguments()) {
-          if (arg == transposeOp.input1()) {
-            transposeArg =
-                func.front().addArgument(transposeOp.output().getType(), loc);
-            transposeOp.input1().replaceAllUsesWith(transposeArg);
-            func.front().eraseArgument(idx);
-            break;
-          }
-          idx++;
-        }
-
-        func.setType(builder.getFunctionType(
-            func.front().getArgumentTypes(),
-            func.back().getTerminator()->getOperandTypes()));
-
-        transposeOp.output().replaceAllUsesWith(transposeArg);
-        opToErase.push_back(transposeOp);
-      } else {
-        for (auto user : transposeOp.output().getUsers()) {
-          if (auto reshapeOp = dyn_cast<tosa::ReshapeOp>(user)) {
-            builder.setInsertionPointAfter(transposeOp);
-            auto newReshapeOp = builder.create<tosa::ReshapeOp>(
-                loc, reshapeOp.output().getType(), transposeOp.input1(),
-                reshapeOp.new_shape());
-
-            reshapeOp.output().replaceAllUsesWith(newReshapeOp.output());
-            opToErase.push_back(reshapeOp);
-            opToErase.push_back(transposeOp);
-          }
-        }
+  LogicalResult matchAndRewrite(tosa::Conv2DOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.input().getDefiningOp<tosa::TransposeOp>()) {
+      if (auto func = dyn_cast<FuncOp>(op->getParentRegion()->getParentOp())) {
+        auto input = func.front().addArgument(op.input().getType(), op.getLoc());
+        op.inputMutable().assign(input);
+        auto resultTypes = func.front().getTerminator()->getOperandTypes();
+        auto inputTypes = func.front().getArgumentTypes();
+        func.setType(rewriter.getFunctionType(inputTypes, resultTypes));
       }
     }
 
-    for (auto addOp : func.getOps<tosa::AddOp>()) {
-      auto loc = addOp.getLoc();
-
-      tosa::TransposeOp transposeOp1;
-      tosa::TransposeOp transposeOp2;
-      tosa::ClampOp clampOp2;
-      if (addOp.input1().getDefiningOp()) {
-        transposeOp1 =
-            dyn_cast<tosa::TransposeOp>(addOp.input1().getDefiningOp());
-      }
-      if (addOp.input2().getDefiningOp()) {
-        transposeOp2 =
-            dyn_cast<tosa::TransposeOp>(addOp.input2().getDefiningOp());
-        clampOp2 = dyn_cast<tosa::ClampOp>(addOp.input2().getDefiningOp());
-      }
-
-      if (transposeOp1 && transposeOp2) {
-        for (auto addUser : addOp.output().getUsers()) {
-          if (auto clampOp = dyn_cast<tosa::ClampOp>(addUser)) {
-            for (auto clampUser : clampOp.output().getUsers()) {
-              if (auto transposeOpLast =
-                      dyn_cast<tosa::TransposeOp>(clampUser)) {
-                builder.setInsertionPointAfter(addOp);
-                auto newAddOp = builder.create<tosa::AddOp>(
-                    loc, transposeOp1.input1().getType(), transposeOp1.input1(),
-                    transposeOp2.input1());
-                auto newClampOp = builder.create<tosa::ClampOp>(
-                    loc, transposeOp1.input1().getType(), newAddOp.output(),
-                    clampOp.min_int(), clampOp.max_int(), clampOp.min_fp(),
-                    clampOp.max_fp());
-
-                for (auto user : transposeOp1.output().getUsers()) {
-                  if (auto transposeOp = dyn_cast<tosa::TransposeOp>(user)) {
-                    transposeOp.output().replaceAllUsesWith(
-                        transposeOp1.input1());
-                    opToErase.push_back(transposeOp);
-                  }
-                }
-                for (auto user : transposeOp2.output().getUsers()) {
-                  if (auto transposeOp = dyn_cast<tosa::TransposeOp>(user)) {
-                    transposeOp.output().replaceAllUsesWith(
-                        transposeOp2.input1());
-                    opToErase.push_back(transposeOp);
-                  }
-                }
-
-                clampOp.output().replaceAllUsesWith(newClampOp.output());
-                transposeOpLast.output().replaceAllUsesWith(
-                    newClampOp.output());
-                opToErase.push_back(transposeOpLast);
-                opToErase.push_back(clampOp);
-                opToErase.push_back(addOp);
-                opToErase.push_back(transposeOp1);
-                opToErase.push_back(transposeOp2);
-              }
-            }
-          }
-        }
-      }
-
-      else if (transposeOp1 && clampOp2) {
-        for (auto addUser : addOp.output().getUsers()) {
-          if (auto clampOp = dyn_cast<tosa::ClampOp>(addUser)) {
-            for (auto clampUser : clampOp.output().getUsers()) {
-              if (auto transposeOpLast =
-                      dyn_cast<tosa::TransposeOp>(clampUser)) {
-                builder.setInsertionPointAfter(addOp);
-                auto newAddOp = builder.create<tosa::AddOp>(
-                    loc, transposeOp1.input1().getType(), transposeOp1.input1(),
-                    addOp.input2());
-                auto newClampOp = builder.create<tosa::ClampOp>(
-                    loc, transposeOp1.input1().getType(), newAddOp.output(),
-                    clampOp.min_int(), clampOp.max_int(), clampOp.min_fp(),
-                    clampOp.max_fp());
-
-                clampOp.output().replaceAllUsesWith(newClampOp.output());
-                transposeOpLast.output().replaceAllUsesWith(
-                    newClampOp.output());
-                opToErase.push_back(transposeOpLast);
-                opToErase.push_back(clampOp);
-                opToErase.push_back(addOp);
-                opToErase.push_back(transposeOp1);
-              }
-            }
-          }
-        }
+    if (op.weight().getDefiningOp()) {
+      if (auto func = dyn_cast<FuncOp>(op->getParentRegion()->getParentOp())) {
+        auto weight = func.front().addArgument(op.weight().getType(), op.getLoc());
+        op.weightMutable().assign(weight);
+        auto resultTypes = func.front().getTerminator()->getOperandTypes();
+        auto inputTypes = func.front().getArgumentTypes();
+        func.setType(rewriter.getFunctionType(inputTypes, resultTypes));
       }
     }
+
+    if (op.bias().getDefiningOp()) {
+      if (auto func = dyn_cast<FuncOp>(op->getParentRegion()->getParentOp())) {
+        auto bias = func.front().addArgument(op.bias().getType(), op.getLoc());
+        op.biasMutable().assign(bias);
+        auto resultTypes = func.front().getTerminator()->getOperandTypes();
+        auto inputTypes = func.front().getArgumentTypes();
+        func.setType(rewriter.getFunctionType(inputTypes, resultTypes));
+      }
+    }
+
+    return success();
   }
-  for (auto op : opToErase)
-    op->erase();
+};
+} // namespace
 
-  // Remove constants
-  opToErase = SmallVector<Operation *, 32>();
-  for (auto func : module.getOps<FuncOp>()) {
-    for (auto constOp : func.getOps<tosa::ConstOp>()) {
-      auto loc = constOp.getLoc();
+namespace {
+struct MatMulOpRewritePattern : public OpRewritePattern<tosa::MatMulOp> {
+  using OpRewritePattern<tosa::MatMulOp>::OpRewritePattern;
 
-      // Create a new function argument
-      if (!constOp.use_empty()) {
-        auto constType =
-            constOp.output().getType().dyn_cast<RankedTensorType>();
-        auto constArg = func.front().addArgument(constType, loc);
-        func.setType(builder.getFunctionType(
-            func.front().getArgumentTypes(),
-            func.back().getTerminator()->getOperandTypes()));
-
-        constOp.output().replaceAllUsesWith(constArg);
+  LogicalResult matchAndRewrite(tosa::MatMulOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.b().getDefiningOp()) {
+      if (auto func = dyn_cast<FuncOp>(op->getParentRegion()->getParentOp())) {
+        auto weight = func.front().addArgument(op.b().getType(), op.getLoc());
+        op.bMutable().assign(weight);
+        auto resultTypes = func.front().getTerminator()->getOperandTypes();
+        auto inputTypes = func.front().getArgumentTypes();
+        func.setType(rewriter.getFunctionType(inputTypes, resultTypes));
       }
-      opToErase.push_back(constOp);
     }
+    
+    return success();
   }
-  for (auto op : opToErase)
-    op->erase();
+};
+} // namespace
 
-  // Order function arguments
-  for (auto func : module.getOps<FuncOp>()) {
-    auto numArguments = func.getNumArguments();
+namespace {
+struct AddOpRewritePattern : public OpRewritePattern<tosa::AddOp> {
+  using OpRewritePattern<tosa::AddOp>::OpRewritePattern;
 
-    func.walk([&](Operation *op) {
-      for (auto operand : op->getOperands()) {
-        if (!operand.getDefiningOp()) {
-          auto newArgument =
-              func.front().addArgument(operand.getType(), func.getLoc());
-          operand.replaceAllUsesWith(newArgument);
-        }
+  LogicalResult matchAndRewrite(tosa::AddOp op,
+                                PatternRewriter &rewriter) const override {
+    if (op.input1().getDefiningOp<tosa::ConstOp>()) {
+      if (auto func = dyn_cast<FuncOp>(op->getParentRegion()->getParentOp())) {
+        auto weight = func.front().addArgument(op.input1().getType(), op.getLoc());
+        op.input1Mutable().assign(weight);
+        auto resultTypes = func.front().getTerminator()->getOperandTypes();
+        auto inputTypes = func.front().getArgumentTypes();
+        func.setType(rewriter.getFunctionType(inputTypes, resultTypes));
       }
-    });
-
-    for (unsigned idx = 0; idx < numArguments; idx++) {
-      func.front().eraseArgument(0);
     }
 
-    func.setType(builder.getFunctionType(
-        func.front().getArgumentTypes(),
-        func.back().getTerminator()->getOperandTypes()));
+    if (op.input2().getDefiningOp<tosa::ConstOp>()) {
+      if (auto func = dyn_cast<FuncOp>(op->getParentRegion()->getParentOp())) {
+        auto weight = func.front().addArgument(op.input2().getType(), op.getLoc());
+        op.input2Mutable().assign(weight);
+        auto resultTypes = func.front().getTerminator()->getOperandTypes();
+        auto inputTypes = func.front().getArgumentTypes();
+        func.setType(rewriter.getFunctionType(inputTypes, resultTypes));
+      }
+    }
+    
+    return success();
   }
-
-  return true;
-}
+};
+} // namespace
 
 namespace {
 struct TosaConstToArgument
     : public TosaConstToArgumentBase<TosaConstToArgument> {
   void runOnOperation() override {
     auto module = getOperation();
-    applyTosaConstToArgument(module);
+    auto context = module.getContext();
+    auto builder = OpBuilder(module);
+
+    mlir::RewritePatternSet patterns(context);
+    patterns.add<Conv2DOpRewritePattern>(context);
+    patterns.add<MatMulOpRewritePattern>(context);
+    patterns.add<AddOpRewritePattern>(context);
+    (void)applyPatternsAndFoldGreedily(module, std::move(patterns));
+
+    // Order function arguments
+    module.walk([&](FuncOp func) {
+      auto numArguments = func.getNumArguments();
+      func.walk([&](Operation *op) {
+        for (auto operand : op->getOperands()) {
+          if (!operand.getDefiningOp()) {
+            auto newArgument =
+                func.front().addArgument(operand.getType(), func.getLoc());
+            operand.replaceAllUsesWith(newArgument);
+          }
+        }
+      });
+      for (unsigned idx = 0; idx < numArguments; idx++) {
+        func.front().eraseArgument(0);
+      }
+      func.setType(builder.getFunctionType(
+          func.front().getArgumentTypes(),
+          func.back().getTerminator()->getOperandTypes()));
+    });
   }
 };
 } // namespace

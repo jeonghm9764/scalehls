@@ -22,7 +22,7 @@ struct Conv2DOpRewritePattern : public OpRewritePattern<tosa::Conv2DOp> {
 
   LogicalResult matchAndRewrite(tosa::Conv2DOp op,
                                 PatternRewriter &rewriter) const override {
-    if (op.input().getDefiningOp<tosa::TransposeOp>()) {
+    /*if (op.input().getDefiningOp<tosa::TransposeOp>()) {
       if (auto func = dyn_cast<FuncOp>(op->getParentRegion()->getParentOp())) {
         auto input = func.front().addArgument(op.input().getType(), op.getLoc());
         op.inputMutable().assign(input);
@@ -30,7 +30,7 @@ struct Conv2DOpRewritePattern : public OpRewritePattern<tosa::Conv2DOp> {
         auto inputTypes = func.front().getArgumentTypes();
         func.setType(rewriter.getFunctionType(inputTypes, resultTypes));
       }
-    }
+    }*/
 
     if (op.weight().getDefiningOp()) {
       if (auto func = dyn_cast<FuncOp>(op->getParentRegion()->getParentOp())) {
@@ -122,6 +122,22 @@ struct TosaConstToArgument
     patterns.add<MatMulOpRewritePattern>(context);
     patterns.add<AddOpRewritePattern>(context);
     (void)applyPatternsAndFoldGreedily(module, std::move(patterns));
+
+    // Convert first input transpose
+    module.walk([&](FuncOp func) {
+      func.walk([&](tosa::Conv2DOp op) {
+        if (auto transposeOp = op.input().getDefiningOp<tosa::TransposeOp>()) {
+          auto input = func.front().addArgument(op.input().getType(), op.getLoc());
+          op.inputMutable().assign(input);
+          auto resultTypes = func.front().getTerminator()->getOperandTypes();
+          auto inputTypes = func.front().getArgumentTypes();
+          func.setType(builder.getFunctionType(inputTypes, resultTypes));
+          auto perms = transposeOp.perms().getDefiningOp<tosa::ConstOp>();
+          transposeOp.erase();
+          perms.erase();
+        }
+      });
+    });
 
     // Order function arguments
     module.walk([&](FuncOp func) {

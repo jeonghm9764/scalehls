@@ -113,7 +113,9 @@ struct TosaSimplifyGraph : public TosaSimplifyGraphBase<TosaSimplifyGraph> {
     patterns.add<ClampOpRewritePattern>(context);
     patterns.add<TransposeOpRewritePattern>(context);
     patterns.add<AddOpRewritePattern>(context);
-    (void)applyPatternsAndFoldGreedily(func, std::move(patterns));
+    GreedyRewriteConfig grc;
+    grc.maxIterations = GreedyRewriteConfig::kNoIterationLimit;
+    (void)applyPatternsAndFoldGreedily(func, std::move(patterns), grc);
   }
 };
 } // namespace

@@ -381,6 +381,37 @@ static bool applyCreatePaddedBuffer(ModuleOp module) {
         opToErase.push_back(reshapeOp);
       }
 
+      else if (auto transposeOp = dyn_cast<tosa::TransposeOp>(op)) {
+        // Create a new function argument
+        auto inType = transposeOp.input1().getType().dyn_cast<RankedTensorType>();
+        auto inMemrefArg = func.front().addArgument(
+            MemRefType::get(inType.getShape(), inType.getElementType()), loc);
+        func.setType(builder.getFunctionType(
+            func.front().getArgumentTypes(),
+            func.back().getTerminator()->getOperandTypes()));
+
+        // Change the original input to memref
+        builder.setInsertionPoint(transposeOp);
+        auto inToMemref = builder.create<bufferization::ToMemrefOp>(
+            loc, MemRefType::get(inType.getShape(), inType.getElementType()),
+            transposeOp.input1());
+
+        // Copy original input to the new input
+        builder.create<memref::CopyOp>(loc, inToMemref, inMemrefArg);
+
+        // Change the new input to tensor
+        auto inToTensor =
+            builder.create<bufferization::ToTensorOp>(loc, inMemrefArg);
+
+        // Create a new reshape
+        auto newTransposeOp = builder.create<tosa::TransposeOp>(
+            loc, transposeOp.output().getType(), inToTensor.result(),
+            transposeOp.perms());
+
+        transposeOp.output().replaceAllUsesWith(newTransposeOp.output());
+        opToErase.push_back(transposeOp);
+      }
+
       else if (auto fullyConnectedOp = dyn_cast<tosa::FullyConnectedOp>(op)) {
         // Create a new function argument
         auto inType =
@@ -442,6 +473,10 @@ static bool applyCreatePaddedBuffer(ModuleOp module) {
 
         matMulOp.c().replaceAllUsesWith(newMatMulOp.c());
         opToErase.push_back(matMulOp);
+      }
+
+      else if (auto constOp = dyn_cast<tosa::ConstOp>(op)) {
+        return;
       }
 
       else if (auto returnOp = dyn_cast<func::ReturnOp>(op)) {

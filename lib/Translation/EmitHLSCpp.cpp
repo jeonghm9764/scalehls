@@ -1781,25 +1781,19 @@ void ModuleEmitter::emitFunctionDirectives(FuncOp func,
         if (!isFullyPartitioned(memrefType)) {
           indent() << "#pragma HLS interface";
           // For now, we set the offset of all m_axi interfaces as slave.
-          // For now, we set the offset of all m_axi interfaces as slave.
           auto kind = MemoryKind(memrefType.getMemorySpaceAsInt());
           if (kind == MemoryKind::DRAM) {
             os << " m_axi offset=slave bundle=inout";
 
-            for (auto attr : func->getAttr("weights").dyn_cast<ArrayAttr>()) {
-              if (idx == attr.dyn_cast<IntegerAttr>().getInt()) {
-                os << "_weights";
+            // Set bundle if specified
+            auto bundle = 0;
+            while (func->hasAttr("bundle" + std::to_string(bundle))) {
+              for (auto attr : func->getAttr("bundle" + std::to_string(bundle)).dyn_cast<ArrayAttr>()) {
+                if (idx == attr.dyn_cast<IntegerAttr>().getInt()) {
+                  os << "_bundle" << bundle;
+                }
               }
-            }
-            for (auto attr : func->getAttr("biases").dyn_cast<ArrayAttr>()) {
-              if (idx == attr.dyn_cast<IntegerAttr>().getInt()) {
-                os << "_biases";
-              }
-            }
-            for (auto attr : func->getAttr("others").dyn_cast<ArrayAttr>()) {
-              if (idx == attr.dyn_cast<IntegerAttr>().getInt()) {
-                os << "_others";
-              }
+              bundle++;
             }
           } else
             os << " bram";

@@ -520,35 +520,39 @@ static bool applyCreatePaddedBuffer(ModuleOp module) {
   for (auto op : opToErase)
     op->erase();
 
-  // Mark weights and bias in function signature
+  // Mark weights and bias in function signature for bundling
+  // to prevent II > 1 caused by port issue
   SmallVector<int64_t> weights;
   SmallVector<int64_t> biases;
-  SmallVector<int64_t> others;
+  SmallVector<int64_t> features1;
+  SmallVector<int64_t> features2;
   for (auto func : module.getOps<FuncOp>()) {
     for (unsigned idx = 0; idx < func.getNumArguments(); idx++) {
       auto arg = func.getArgument(idx);
+      bool stored = false;
       for (auto user : arg.getUsers()) {
         if (auto conv2DOp = dyn_cast<tosa::Conv2DOp>(user)) {
           if (arg == conv2DOp.weight()) {
             weights.push_back(idx);
+            stored = true;
           } else if (arg == conv2DOp.bias()) {
             biases.push_back(idx);
+            stored = true;
           }
-          break;
         }
-        if (auto matmulOp = dyn_cast<tosa::MatMulOp>(user)) {
+        else if (auto matmulOp = dyn_cast<tosa::MatMulOp>(user)) {
           if (arg == matmulOp.b()) {
             weights.push_back(idx);
+            stored = true;
           }
-          break;
         }
-        if (auto addOp = dyn_cast<tosa::AddOp>(user)) {
+        else if (auto addOp = dyn_cast<tosa::AddOp>(user)) {
           if (arg == addOp.input2()) {
             biases.push_back(idx);
+            stored = true;
           }
-          break;
         }
-        if (auto subviewOp = dyn_cast<memref::SubViewOp>(user)) {
+        else if (auto subviewOp = dyn_cast<memref::SubViewOp>(user)) {
           for (auto subviewUser : subviewOp->getUsers()) {
             if (auto copyOp = dyn_cast<memref::CopyOp>(subviewUser)) {
               if (copyOp.source().getDefiningOp()) {
@@ -557,7 +561,8 @@ static bool applyCreatePaddedBuffer(ModuleOp module) {
                   if (toMemrefOp.tensor().getDefiningOp()) {
                     if (auto maxpoolOp = dyn_cast<tosa::MaxPool2dOp>(
                             toMemrefOp.tensor().getDefiningOp())) {
-                      others.push_back(idx);
+                      features1.push_back(idx);
+                      stored = true;
                     }
                   }
                 }
@@ -565,26 +570,35 @@ static bool applyCreatePaddedBuffer(ModuleOp module) {
             }
           }
         }
-        if (auto copyOp = dyn_cast<memref::CopyOp>(user)) {
+        else if (auto copyOp = dyn_cast<memref::CopyOp>(user)) {
           if (auto toMemrefOp = dyn_cast<bufferization::ToMemrefOp>(
                   copyOp.source().getDefiningOp())) {
             if (toMemrefOp.tensor().getDefiningOp()) {
               if (auto matmulOp = dyn_cast<tosa::MatMulOp>(
                       toMemrefOp.tensor().getDefiningOp())) {
-                others.push_back(idx);
+                features1.push_back(idx);
+                stored = true;
               }
               if (auto maxpoolOp = dyn_cast<tosa::MaxPool2dOp>(
                       toMemrefOp.tensor().getDefiningOp())) {
-                others.push_back(idx);
+                features1.push_back(idx);
+                stored = true;
               }
             }
           }
         }
+        if (stored) {
+          break;
+        }
+      }
+      if (!stored) {
+        features2.push_back(idx);
       }
     }
-    func->setAttr("weights", builder.getI64ArrayAttr(weights));
-    func->setAttr("biases", builder.getI64ArrayAttr(biases));
-    func->setAttr("others", builder.getI64ArrayAttr(others));
+    func->setAttr("bundle0", builder.getI64ArrayAttr(weights));
+    func->setAttr("bundle1", builder.getI64ArrayAttr(biases));
+    func->setAttr("bundle2", builder.getI64ArrayAttr(features1));
+    func->setAttr("bundle3", builder.getI64ArrayAttr(features2));
   }
 
   return true;

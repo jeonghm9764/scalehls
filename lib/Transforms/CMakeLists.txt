@@ -5,6 +5,7 @@ add_mlir_library(MLIRScaleHLSTransforms
   Dataflow/CreateTokenDepends.cpp
   Dataflow/FuncDuplication.cpp
   Dataflow/LegalizeDataflow.cpp
+  Dataflow/DataflowFunctionOptions.cpp
   Directive/ArrayPartition.cpp
   Directive/CreateHLSPrimitive.cpp
   Directive/FuncPipelining.cpp
@@ -12,7 +13,7 @@ add_mlir_library(MLIRScaleHLSTransforms
   Directive/QoREstimation.cpp
   Graph/CreatePaddedBuffer.cpp
   Graph/ReplaceTensorOperation.cpp
-  Graph/SharedTilingOptions.cpp
+  Graph/SharedFunctionOptions.cpp
   Graph/TosaConstToArgument.cpp
   Graph/TosaFakeQuantize.cpp
   Graph/TosaToLinalgCleanup.cpp

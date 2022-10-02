@@ -405,7 +405,7 @@ static void printTotalComputations(ModuleOp module) {
                           << "\n";);
 }
 
-static bool applySharedTilingOptions(ModuleOp module, unsigned numTargets,
+static bool applySharedFunctionOptions(ModuleOp module, unsigned numTargets,
                                      StringRef outputPath) {
   auto builder = OpBuilder(module);
 
@@ -473,15 +473,15 @@ static bool applySharedTilingOptions(ModuleOp module, unsigned numTargets,
 }
 
 namespace {
-struct SharedTilingOptions
-    : public SharedTilingOptionsBase<SharedTilingOptions> {
+struct SharedFunctionOptions
+    : public SharedFunctionOptionsBase<SharedFunctionOptions> {
   void runOnOperation() override {
     auto module = getOperation();
-    applySharedTilingOptions(module, numTargets, outputPath);
+    applySharedFunctionOptions(module, numTargets, outputPath);
   }
 };
 } // namespace
 
-std::unique_ptr<Pass> scalehls::createSharedTilingOptionsPass() {
-  return std::make_unique<SharedTilingOptions>();
+std::unique_ptr<Pass> scalehls::createSharedFunctionOptionsPass() {
+  return std::make_unique<SharedFunctionOptions>();
 }

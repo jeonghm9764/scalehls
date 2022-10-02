@@ -41,6 +41,7 @@ std::unique_ptr<Pass> createLegalizeDataflowPass();
 std::unique_ptr<Pass> createCreateTokenDependsPass();
 std::unique_ptr<Pass> createBufferizeDataflowPass();
 std::unique_ptr<Pass> createConvertDataflowToFuncPass();
+std::unique_ptr<Pass> createDataflowFunctionOptionsPass();
 
 /// Graph-related passes.
 std::unique_ptr<Pass> createShareTensorOperationPass();
@@ -50,7 +51,7 @@ std::unique_ptr<Pass> createTosaNodeFusionPass();
 std::unique_ptr<Pass> createTosaToLinalgCleanupPass();
 std::unique_ptr<Pass> createTosaConstToArgumentPass();
 std::unique_ptr<Pass> createCreatePaddedBufferPass();
-std::unique_ptr<Pass> createSharedTilingOptionsPass();
+std::unique_ptr<Pass> createSharedFunctionOptionsPass();
 std::unique_ptr<Pass> createReplaceTensorOperationPass();
 std::unique_ptr<Pass> createTosaToLinalgNoBufferPass();
 

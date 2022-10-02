@@ -107,6 +107,20 @@ def ConvertDataflowToFunc :
   let constructor = "mlir::scalehls::createConvertDataflowToFuncPass()";
 }
 
+def DataflowFunctionOptions :
+      Pass<"scalehls-dataflow-function-options", "ModuleOp"> {
+  let summary = "Create differently tiled dataflow functions";
+  let constructor = "mlir::scalehls::createDataflowFunctionOptionsPass()";
+
+  let options = [
+    Option<"numTargets", "num-targets", "unsigned", /*default=*/"0",
+           "Number of options to be generated">,
+    Option<"outputPath", "output-path", "std::string",
+           /*default=*/"\"./\"",
+           "File path: the path for dumping">
+  ];
+}
+
 //===----------------------------------------------------------------------===//
 // Graph-related Passes
 //===----------------------------------------------------------------------===//
@@ -148,17 +162,17 @@ def CreatePaddedBuffer :
   let constructor = "mlir::scalehls::createCreatePaddedBufferPass()";
 }
 
-def SharedTilingOptions :
-      Pass<"scalehls-shared-tiling-options", "ModuleOp"> {
+def SharedFunctionOptions :
+      Pass<"scalehls-shared-function-options", "ModuleOp"> {
   let summary = "Create differently tiled shared functions";
-  let constructor = "mlir::scalehls::createSharedTilingOptionsPass()";
+  let constructor = "mlir::scalehls::createSharedFunctionOptionsPass()";
 
   let options = [
     Option<"numTargets", "num-targets", "unsigned", /*default=*/"0",
            "Number of shared functions to be generated">,
     Option<"outputPath", "output-path", "std::string",
            /*default=*/"\"./\"",
-           "File path: the path for dumping the MLIR of pareto design points">
+           "File path: the path for dumping">
   ];
 }
 
